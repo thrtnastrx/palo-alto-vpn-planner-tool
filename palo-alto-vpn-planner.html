@@ -1,0 +1,1470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Palo Alto Networks VPN Planning Tool</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const VPNPlanner = () => {
+            const defaultConfig = {
+                // Panorama Config
+                template: '',
+                deviceGroup: '',
+                deviceName: '',
+
+                // Peer Info
+                peerName: '',
+                peerType: 'other',
+                changeNumber: '',
+                changeDate: '',
+                contactInfo: '',
+
+                // IKE Gateway
+                ikeGatewayName: '',
+                ikeVersion: 'ikev2',
+                ikeInterface: 'ethernet1/1',
+                localAddressPublic: '',
+                localAddressPrivate: '',
+                peerAddress: '',
+                preSharedKey: '',
+
+                // IKE Crypto Profile
+                ikeCryptoProfile: 'default',
+                ikeEncryption: 'aes-256-cbc',
+                ikeHash: 'sha256',
+                ikeDHGroup: 'group14',
+                ikeLifetime: '8',
+
+                // IPSec Tunnel
+                ipsecTunnelName: '',
+                tunnelInterface: 'tunnel.1',
+                antiReplay: true,
+                tunnelZone: '',
+
+                // IPSec Crypto Profile
+                ipsecCryptoProfile: 'default',
+                ipsecProtocol: 'esp',
+                ipsecEncryption: 'aes-256-cbc',
+                ipsecAuth: 'sha256',
+                ipsecDHGroup: 'group14',
+                ipsecLifetime: '1',
+
+                // Proxy IDs
+                enableProxyID: false,
+                proxyIdName: '',
+                localSubnet: '',
+                remoteSubnet: '',
+
+                // Tunnel IPs
+                tunnelLocalIP: '',
+                tunnelRemoteIP: '',
+                tunnelNetmask: '255.255.255.252',
+
+                // BGP Configuration
+                enableBGP: false,
+                localAS: '',
+                peerAS: '',
+                bgpPeerGroup: '',
+                bgpPeerName: '',
+                bgpLocalAddress: '',
+                bgpPeerAddress: '',
+                bgpHoldTime: '30',
+                bgpKeepAlive: '10',
+                prefixesToExport: '',
+                prefixesToImport: '',
+
+                // Static Routes Configuration
+                enableStatic: false,
+                staticRoutes: []
+            };
+
+            const [config, setConfig] = useState(defaultConfig);
+
+            const [savedConfigs, setSavedConfigs] = useState(() => {
+                try {
+                    const saved = localStorage.getItem('vpnPlannerConfigs');
+                    return saved ? JSON.parse(saved) : [];
+                } catch (error) {
+                    console.error('Error loading saved configs:', error);
+                    return [];
+                }
+            });
+            const [showSavedConfigs, setShowSavedConfigs] = useState(false);
+
+            useEffect(() => {
+                try {
+                    localStorage.setItem('vpnPlannerConfigs', JSON.stringify(savedConfigs));
+                } catch (error) {
+                    console.error('Error saving configs to localStorage:', error);
+                }
+            }, [savedConfigs]);
+
+            const updateConfig = (field, value) => {
+                setConfig(prev => {
+                    const updated = { ...prev, [field]: value };
+
+                    // Auto-populate names based on peer name
+                    if (field === 'peerName' && value) {
+                        const safeName = value.replace(/[^a-zA-Z0-9-_]/g, '_');
+                        updated.ikeGatewayName = `${value}-ike-gw`;
+                        updated.ipsecTunnelName = `${value}-ipsec-tunnel`;
+                        updated.proxyIdName = `Proxy-${safeName}`;
+                        updated.ikeCryptoProfile = `${value}-ike`;
+                        updated.ipsecCryptoProfile = `${value}-ipsec`;
+                        updated.bgpPeerGroup = `pg-${value}`;
+                        updated.bgpPeerName = `${value}-peer`;
+                    }
+
+                    // Auto-populate BGP local/peer address if /30
+                    if ((field === 'tunnelNetmask' && value === '255.255.255.252') ||
+                        (field === 'tunnelLocalIP' || field === 'tunnelRemoteIP')) {
+                        if (updated.tunnelNetmask === '255.255.255.252' &&
+                            updated.tunnelLocalIP &&
+                            updated.tunnelRemoteIP) {
+                            updated.bgpLocalAddress = updated.tunnelLocalIP;
+                            updated.bgpPeerAddress = updated.tunnelRemoteIP;
+                        }
+                    }
+
+                    return updated;
+                });
+            };
+
+            const addStaticRoute = () => {
+                setConfig(prev => ({
+                    ...prev,
+                    staticRoutes: [...prev.staticRoutes, { network: '', subnetMask: '', cidr: '', nextHop: '', nextHopInterface: '' }]
+                }));
+            };
+
+            // Convert CIDR to subnet mask
+            const cidrToMask = (cidr) => {
+                const masks = {
+                    '16': '255.255.0.0',
+                    '17': '255.255.128.0',
+                    '18': '255.255.192.0',
+                    '19': '255.255.224.0',
+                    '20': '255.255.240.0',
+                    '21': '255.255.248.0',
+                    '22': '255.255.252.0',
+                    '23': '255.255.254.0',
+                    '24': '255.255.255.0',
+                    '25': '255.255.255.128',
+                    '26': '255.255.255.192',
+                    '27': '255.255.255.224',
+                    '28': '255.255.255.240',
+                    '29': '255.255.255.248',
+                    '30': '255.255.255.252',
+                    '31': '255.255.255.254'
+                };
+                return masks[cidr] || '';
+            };
+
+            const updateStaticRoute = (index, field, value) => {
+                setConfig(prev => {
+                    const updated = { ...prev };
+                    updated.staticRoutes[index][field] = value;
+                    return updated;
+                });
+            };
+
+            const removeStaticRoute = (index) => {
+                setConfig(prev => ({
+                    ...prev,
+                    staticRoutes: prev.staticRoutes.filter((_, i) => i !== index)
+                }));
+            };
+
+            const saveConfig = () => {
+                const newConfig = {
+                    id: Date.now(),
+                    name: config.peerName || 'Unnamed Config',
+                    timestamp: new Date().toLocaleString(),
+                    config: { ...config }
+                };
+                setSavedConfigs(prev => [...prev, newConfig]);
+            };
+
+            const loadConfig = (savedConfig) => {
+                setConfig(savedConfig.config);
+                setShowSavedConfigs(false);
+            };
+
+            const deleteSavedConfig = (id) => {
+                setSavedConfigs(prev => prev.filter(c => c.id !== id));
+            };
+
+            const clearAllConfigs = () => {
+                if (confirm('Are you sure you want to delete all saved configurations? This cannot be undone.')) {
+                    setSavedConfigs([]);
+                }
+            };
+
+            const clearAllSettings = () => {
+                if (confirm('Clear all current configuration settings? This cannot be undone.')) {
+                    setConfig(defaultConfig);
+                }
+            };
+
+            const exportToFile = () => {
+                const dataStr = JSON.stringify(config, null, 2);
+                const dataBlob = new Blob([dataStr], { type: 'application/json' });
+                const url = URL.createObjectURL(dataBlob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `vpn-config-${config.peerName || 'export'}.json`;
+                link.click();
+            };
+
+            const importFromFile = (event) => {
+                const file = event.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        try {
+                            const imported = JSON.parse(e.target.result);
+                            setConfig(imported);
+                        } catch (error) {
+                            alert('Error importing file: ' + error.message);
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+            };
+
+            const generateCLI = () => {
+                const { template, deviceGroup, peerName } = config;
+                if (!template || !deviceGroup || !peerName) {
+                    return "# Please fill in Template, Device Group, and Peer Name to generate CLI commands";
+                }
+
+                let commands = [];
+                commands.push("# Palo Alto Networks VPN Configuration");
+                commands.push(`# Template: ${template}`);
+                commands.push(`# Device Group: ${deviceGroup}`);
+                commands.push(`# Peer: ${peerName}\n`);
+
+                // IKE Crypto Profile
+                commands.push("# IKE Crypto Profile");
+                commands.push(`set template ${template} config network ike crypto-profiles ike-crypto-profiles ${config.ikeCryptoProfile} encryption ${config.ikeEncryption}`);
+                commands.push(`set template ${template} config network ike crypto-profiles ike-crypto-profiles ${config.ikeCryptoProfile} hash ${config.ikeHash}`);
+                commands.push(`set template ${template} config network ike crypto-profiles ike-crypto-profiles ${config.ikeCryptoProfile} dh-group ${config.ikeDHGroup}`);
+                commands.push(`set template ${template} config network ike crypto-profiles ike-crypto-profiles ${config.ikeCryptoProfile} lifetime hours ${config.ikeLifetime}\n`);
+
+                // IKE Gateway
+                commands.push("# IKE Gateway");
+                commands.push(`set template ${template} config network ike gateway ${config.ikeGatewayName} protocol ikev1 dpd enable yes`);
+                commands.push(`set template ${template} config network ike gateway ${config.ikeGatewayName} protocol ${config.ikeVersion} dpd enable yes`);
+                commands.push(`set template ${template} config network ike gateway ${config.ikeGatewayName} protocol ${config.ikeVersion} ike-crypto-profile ${config.ikeCryptoProfile}`);
+                commands.push(`set template ${template} config network ike gateway ${config.ikeGatewayName} local-address interface ${config.ikeInterface}`);
+                if (config.localAddressPublic) {
+                    commands.push(`set template ${template} config network ike gateway ${config.ikeGatewayName} local-address ip ${config.localAddressPublic}`);
+                }
+                commands.push(`set template ${template} config network ike gateway ${config.ikeGatewayName} protocol-common nat-traversal enable yes`);
+                commands.push(`set template ${template} config network ike gateway ${config.ikeGatewayName} protocol-common fragmentation enable no`);
+                commands.push(`set template ${template} config network ike gateway ${config.ikeGatewayName} peer-address ip ${config.peerAddress}`);
+                commands.push(`set template ${template} config network ike gateway ${config.ikeGatewayName} authentication pre-shared-key key ${config.preSharedKey}\n`);
+
+                // IPSec Crypto Profile
+                commands.push("# IPSec Crypto Profile");
+                commands.push(`set template ${template} config network ike crypto-profiles ipsec-crypto-profiles ${config.ipsecCryptoProfile} ${config.ipsecProtocol} encryption ${config.ipsecEncryption}`);
+                commands.push(`set template ${template} config network ike crypto-profiles ipsec-crypto-profiles ${config.ipsecCryptoProfile} ${config.ipsecProtocol} authentication ${config.ipsecAuth}`);
+                commands.push(`set template ${template} config network ike crypto-profiles ipsec-crypto-profiles ${config.ipsecCryptoProfile} dh-group ${config.ipsecDHGroup}`);
+                commands.push(`set template ${template} config network ike crypto-profiles ipsec-crypto-profiles ${config.ipsecCryptoProfile} lifetime hours ${config.ipsecLifetime}\n`);
+
+                // Tunnel Interface
+                commands.push("# Tunnel Interface");
+                commands.push(`set template ${template} config network interface ${config.tunnelInterface} comment "VPN to ${peerName}"`);
+                if (config.tunnelLocalIP && config.tunnelNetmask) {
+                    commands.push(`set template ${template} config network interface ${config.tunnelInterface} ip ${config.tunnelLocalIP}/${config.tunnelNetmask}`);
+                }
+                if (config.tunnelZone) {
+                    commands.push(`set template ${template} config network virtual-router default interface ${config.tunnelInterface}`);
+                    commands.push(`set template ${template} config zone ${config.tunnelZone} network layer3 ${config.tunnelInterface}`);
+                }
+                commands.push("");
+
+                // IPSec Tunnel
+                commands.push("# IPSec Tunnel");
+                commands.push(`set template ${template} config network tunnel ipsec ${config.ipsecTunnelName} auto-key ike-gateway ${config.ikeGatewayName}`);
+                commands.push(`set template ${template} config network tunnel ipsec ${config.ipsecTunnelName} auto-key ipsec-crypto-profile ${config.ipsecCryptoProfile}`);
+                commands.push(`set template ${template} config network tunnel ipsec ${config.ipsecTunnelName} tunnel-interface ${config.tunnelInterface}`);
+                if (config.antiReplay) {
+                    commands.push(`set template ${template} config network tunnel ipsec ${config.ipsecTunnelName} anti-replay yes`);
+                }
+                commands.push("");
+
+                // Proxy ID
+                if (config.enableProxyID && config.proxyIdName && config.localSubnet && config.remoteSubnet) {
+                    commands.push("# Proxy ID");
+                    commands.push(`set template ${template} config network tunnel ipsec ${config.ipsecTunnelName} auto-key proxy-id ${config.proxyIdName} protocol any`);
+                    commands.push(`set template ${template} config network tunnel ipsec ${config.ipsecTunnelName} auto-key proxy-id ${config.proxyIdName} local ${config.localSubnet}`);
+                    commands.push(`set template ${template} config network tunnel ipsec ${config.ipsecTunnelName} auto-key proxy-id ${config.proxyIdName} remote ${config.remoteSubnet}\n`);
+                }
+
+                // Static Routes
+                if (config.enableStatic && config.staticRoutes && config.staticRoutes.length > 0) {
+                    commands.push("# Static Routes");
+                    config.staticRoutes.forEach((route, index) => {
+                        if (route.network && route.subnetMask && route.nextHop) {
+                            commands.push(`set template ${template} config network virtual-router default routing-table ip static-route ${peerName}-static-${index + 1} destination ${route.network}/${route.subnetMask}`);
+                            commands.push(`set template ${template} config network virtual-router default routing-table ip static-route ${peerName}-static-${index + 1} nexthop ip-address ${route.nextHop}`);
+                            const interfaceToUse = route.nextHopInterface || config.tunnelInterface;
+                            commands.push(`set template ${template} config network virtual-router default routing-table ip static-route ${peerName}-static-${index + 1} interface ${interfaceToUse}`);
+                        }
+                    });
+                    commands.push("");
+                }
+
+                // Security Policies
+                if (config.tunnelZone) {
+                    commands.push("# Security Policies");
+                    commands.push(`set device-group ${deviceGroup} pre-rulebase security rules VPN-${peerName}-ICMP from ${config.tunnelZone}`);
+                    commands.push(`set device-group ${deviceGroup} pre-rulebase security rules VPN-${peerName}-ICMP to ${config.tunnelZone}`);
+                    commands.push(`set device-group ${deviceGroup} pre-rulebase security rules VPN-${peerName}-ICMP source any`);
+                    commands.push(`set device-group ${deviceGroup} pre-rulebase security rules VPN-${peerName}-ICMP destination any`);
+                    commands.push(`set device-group ${deviceGroup} pre-rulebase security rules VPN-${peerName}-ICMP application ping`);
+                    commands.push(`set device-group ${deviceGroup} pre-rulebase security rules VPN-${peerName}-ICMP service application-default`);
+                    commands.push(`set device-group ${deviceGroup} pre-rulebase security rules VPN-${peerName}-ICMP action allow\n`);
+                    
+                    if (config.enableBGP) {
+                        commands.push(`set device-group ${deviceGroup} pre-rulebase security rules VPN-${peerName}-BGP from ${config.tunnelZone}`);
+                        commands.push(`set device-group ${deviceGroup} pre-rulebase security rules VPN-${peerName}-BGP to ${config.tunnelZone}`);
+                        commands.push(`set device-group ${deviceGroup} pre-rulebase security rules VPN-${peerName}-BGP source any`);
+                        commands.push(`set device-group ${deviceGroup} pre-rulebase security rules VPN-${peerName}-BGP destination any`);
+                        commands.push(`set device-group ${deviceGroup} pre-rulebase security rules VPN-${peerName}-BGP application bgp`);
+                        commands.push(`set device-group ${deviceGroup} pre-rulebase security rules VPN-${peerName}-BGP service application-default`);
+                        commands.push(`set device-group ${deviceGroup} pre-rulebase security rules VPN-${peerName}-BGP action allow\n`);
+                    }
+                }
+
+                // BGP Configuration
+                if (config.enableBGP && config.localAS && config.peerAS && config.bgpPeerAddress) {
+                    const bgpPeerGroup = config.bgpPeerGroup || `pg-${peerName}`;
+                    commands.push("# BGP Configuration");
+                    commands.push(`set template ${template} config network virtual-router default protocol bgp enable yes`);
+                    commands.push(`set template ${template} config network virtual-router default protocol bgp router-id ${config.tunnelLocalIP || config.localAddressPublic}`);
+                    commands.push(`set template ${template} config network virtual-router default protocol bgp local-as ${config.localAS}`);
+                    commands.push(`set template ${template} config network virtual-router default protocol bgp peer-group ${bgpPeerGroup} type ebgp`);
+                    commands.push(`set template ${template} config network virtual-router default protocol bgp peer-group ${bgpPeerGroup} peer ${config.bgpPeerName} peer-as ${config.peerAS}`);
+                    commands.push(`set template ${template} config network virtual-router default protocol bgp peer-group ${bgpPeerGroup} peer ${config.bgpPeerName} local-address ip ${config.bgpLocalAddress || config.tunnelLocalIP}`);
+                    commands.push(`set template ${template} config network virtual-router default protocol bgp peer-group ${bgpPeerGroup} peer ${config.bgpPeerName} peer-address ip ${config.bgpPeerAddress}`);
+                    commands.push(`set template ${template} config network virtual-router default protocol bgp peer-group ${bgpPeerGroup} peer ${config.bgpPeerName} connection-options hold-time ${config.bgpHoldTime}`);
+                    commands.push(`set template ${template} config network virtual-router default protocol bgp peer-group ${bgpPeerGroup} peer ${config.bgpPeerName} connection-options keep-alive-interval ${config.bgpKeepAlive}`);
+                    commands.push(`set template ${template} config network virtual-router default protocol bgp peer-group ${bgpPeerGroup} peer ${config.bgpPeerName} enable yes`);
+                    
+                    // Export prefixes
+                    if (config.prefixesToExport) {
+                        commands.push("");
+                        commands.push("# BGP Export Policy");
+                        const exportPrefixes = config.prefixesToExport.split('\n').filter(p => p.trim());
+                        exportPrefixes.forEach((prefix, index) => {
+                            const prefixName = `Export-${peerName}-${index + 1}`;
+                            commands.push(`set template ${template} config network virtual-router default protocol bgp policy export rules ${prefixName} action allow update as-path none`);
+                            commands.push(`set template ${template} config network virtual-router default protocol bgp policy export rules ${prefixName} match address-prefix ${prefix.trim()}`);
+                        });
+                    }
+                    
+                    // Import prefixes
+                    if (config.prefixesToImport) {
+                        commands.push("");
+                        commands.push("# BGP Import Policy");
+                        const importPrefixes = config.prefixesToImport.split('\n').filter(p => p.trim());
+                        importPrefixes.forEach((prefix, index) => {
+                            const prefixName = `Import-${peerName}-${index + 1}`;
+                            commands.push(`set template ${template} config network virtual-router default protocol bgp policy import rules ${prefixName} action allow update as-path none`);
+                            commands.push(`set template ${template} config network virtual-router default protocol bgp policy import rules ${prefixName} match address-prefix ${prefix.trim()}`);
+                        });
+                    }
+                    
+                    commands.push("");
+                }
+
+                return commands.join('\n');
+            };
+
+            const copyCLI = () => {
+                const cli = generateCLI();
+                navigator.clipboard.writeText(cli);
+                alert('CLI commands copied to clipboard!');
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    <div className="max-w-7xl mx-auto p-6">
+                        {/* Header */}
+                        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <h1 className="text-3xl font-bold text-gray-900">Palo Alto Networks VPN Planning Tool</h1>
+                                    <p className="text-gray-600 mt-2">Site-to-Site VPN Configuration Generator</p>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={saveConfig}
+                                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                    >
+                                        💾 Save Config
+                                    </button>
+                                    <button
+                                        onClick={() => setShowSavedConfigs(!showSavedConfigs)}
+                                        className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+                                    >
+                                        📋 Saved ({savedConfigs.length})
+                                    </button>
+                                    <button
+                                        onClick={clearAllSettings}
+                                        className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                                    >
+                                        🧹 Clear All Settings
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Saved Configs */}
+                        {showSavedConfigs && (
+                            <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+                                <div className="flex items-center justify-between mb-4">
+                                    <h2 className="text-xl font-bold">Saved Configurations</h2>
+                                    {savedConfigs.length > 0 && (
+                                        <button
+                                            onClick={clearAllConfigs}
+                                            className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700"
+                                        >
+                                            Clear All
+                                        </button>
+                                    )}
+                                </div>
+                                {savedConfigs.length === 0 ? (
+                                    <p className="text-gray-500">No saved configurations yet.</p>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {savedConfigs.map(saved => (
+                                            <div key={saved.id} className="flex items-center justify-between p-3 bg-gray-50 rounded">
+                                                <div>
+                                                    <div className="font-semibold">{saved.name}</div>
+                                                    <div className="text-sm text-gray-500">{saved.timestamp}</div>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <button
+                                                        onClick={() => loadConfig(saved)}
+                                                        className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+                                                    >
+                                                        Load
+                                                    </button>
+                                                    <button
+                                                        onClick={() => deleteSavedConfig(saved.id)}
+                                                        className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700"
+                                                    >
+                                                        Delete
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded">
+                                    <p className="text-sm text-green-800">
+                                        <strong>💾 Auto-saved:</strong> Your configurations are automatically saved to your browser and will persist across sessions.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Configuration Summary - At a Glance */}
+                        {config.peerName && (
+                            <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+                                <h2 className="text-2xl font-bold mb-4 text-gray-900">Configuration Summary - At a Glance</h2>
+                                
+                                {/* Metadata Section */}
+                                {(config.changeNumber || config.changeDate || config.contactInfo) && (
+                                    <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                                        <h3 className="font-semibold text-lg mb-3">Change Information</h3>
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                                            {config.changeNumber && (
+                                                <div>
+                                                    <span className="font-medium">Change Number:</span> {config.changeNumber}
+                                                </div>
+                                            )}
+                                            {config.changeDate && (
+                                                <div>
+                                                    <span className="font-medium">Date:</span> {config.changeDate}
+                                                </div>
+                                            )}
+                                            {config.contactInfo && (
+                                                <div>
+                                                    <span className="font-medium">Contact:</span>
+                                                    <div className="whitespace-pre-wrap">{config.contactInfo}</div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                                
+                                <div className="overflow-x-auto">
+                                    <table className="w-full border-collapse">
+                                        <thead>
+                                            <tr className="bg-gray-100">
+                                                <th className="border border-gray-300 px-4 py-2 text-left font-semibold">Configuration Item</th>
+                                                <th className="border border-gray-300 px-4 py-2 text-left font-semibold">Local Firewall</th>
+                                                <th className="border border-gray-300 px-4 py-2 text-left font-semibold">Peer Firewall ({config.peerName})</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr>
+                                                <td className="border border-gray-300 px-4 py-2 font-medium">Device Name</td>
+                                                <td className="border border-gray-300 px-4 py-2">
+                                                    <input
+                                                        type="text"
+                                                        value={config.deviceName}
+                                                        onChange={(e) => updateConfig('deviceName', e.target.value)}
+                                                        className={`w-full px-2 py-1 border rounded ${!config.deviceName ? 'bg-yellow-100 border-yellow-400' : 'border-gray-300'}`}
+                                                        placeholder="Enter device name"
+                                                    />
+                                                </td>
+                                                <td className="border border-gray-300 px-4 py-2">
+                                                    <input
+                                                        type="text"
+                                                        value={config.peerName}
+                                                        onChange={(e) => updateConfig('peerName', e.target.value)}
+                                                        className="w-full px-2 py-1 border border-gray-300 rounded"
+                                                        placeholder="Peer name"
+                                                    />
+                                                </td>
+                                            </tr>
+                                            <tr className="bg-gray-50">
+                                                <td className="border border-gray-300 px-4 py-2 font-medium">Public IP Address</td>
+                                                <td className="border border-gray-300 px-4 py-2">
+                                                    <input
+                                                        type="text"
+                                                        value={config.localAddressPublic}
+                                                        onChange={(e) => updateConfig('localAddressPublic', e.target.value)}
+                                                        className={`w-full px-2 py-1 border rounded ${!config.localAddressPublic ? 'bg-yellow-100 border-yellow-400' : 'border-gray-300'}`}
+                                                        placeholder="Enter local public IP"
+                                                    />
+                                                </td>
+                                                <td className="border border-gray-300 px-4 py-2">
+                                                    <input
+                                                        type="text"
+                                                        value={config.peerAddress}
+                                                        onChange={(e) => updateConfig('peerAddress', e.target.value)}
+                                                        className={`w-full px-2 py-1 border rounded ${!config.peerAddress ? 'bg-yellow-100 border-yellow-400' : 'border-gray-300'}`}
+                                                        placeholder="Enter peer IP"
+                                                    />
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td className="border border-gray-300 px-4 py-2 font-medium">Pre-Shared Key</td>
+                                                <td className="border border-gray-300 px-4 py-2" colSpan="2">
+                                                    <input
+                                                        type="password"
+                                                        value={config.preSharedKey}
+                                                        onChange={(e) => updateConfig('preSharedKey', e.target.value)}
+                                                        className={`w-full px-2 py-1 border rounded ${!config.preSharedKey ? 'bg-yellow-100 border-yellow-400' : 'border-gray-300'}`}
+                                                        placeholder="Enter pre-shared key"
+                                                    />
+                                                </td>
+                                            </tr>
+                                            <tr className="bg-gray-50">
+                                                <td className="border border-gray-300 px-4 py-2 font-medium">IKE Crypto Profile</td>
+                                                <td className="border border-gray-300 px-4 py-2 text-center text-sm" colSpan="2">
+                                                    {config.ikeVersion.toUpperCase()}, {config.ikeEncryption}, {config.ikeHash}, DH-{config.ikeDHGroup}, Lifetime: {config.ikeLifetime}h
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td className="border border-gray-300 px-4 py-2 font-medium">IPSec Crypto Profile</td>
+                                                <td className="border border-gray-300 px-4 py-2 text-center text-sm" colSpan="2">
+                                                    {config.ipsecProtocol.toUpperCase()}, {config.ipsecEncryption}, {config.ipsecAuth}, DH-{config.ipsecDHGroup}, Lifetime: {config.ipsecLifetime}h
+                                                </td>
+                                            </tr>
+                                            <tr className="bg-gray-50">
+                                                <td className="border border-gray-300 px-4 py-2 font-medium">Tunnel IP Address</td>
+                                                <td className="border border-gray-300 px-4 py-2">
+                                                    <input
+                                                        type="text"
+                                                        value={config.tunnelLocalIP}
+                                                        onChange={(e) => updateConfig('tunnelLocalIP', e.target.value)}
+                                                        className={`w-full px-2 py-1 border rounded ${!config.tunnelLocalIP ? 'bg-yellow-100 border-yellow-400' : 'border-gray-300'}`}
+                                                        placeholder="Enter local tunnel IP"
+                                                    />
+                                                </td>
+                                                <td className="border border-gray-300 px-4 py-2">
+                                                    <input
+                                                        type="text"
+                                                        value={config.tunnelRemoteIP}
+                                                        onChange={(e) => updateConfig('tunnelRemoteIP', e.target.value)}
+                                                        className={`w-full px-2 py-1 border rounded ${!config.tunnelRemoteIP ? 'bg-yellow-100 border-yellow-400' : 'border-gray-300'}`}
+                                                        placeholder="Enter peer tunnel IP"
+                                                    />
+                                                </td>
+                                            </tr>
+                                            {config.enableBGP && (
+                                                <>
+                                                    <tr>
+                                                        <td className="border border-gray-300 px-4 py-2 font-medium">BGP ASN</td>
+                                                        <td className="border border-gray-300 px-4 py-2">
+                                                            <input
+                                                                type="text"
+                                                                value={config.localAS}
+                                                                onChange={(e) => updateConfig('localAS', e.target.value)}
+                                                                className={`w-full px-2 py-1 border rounded ${!config.localAS ? 'bg-yellow-100 border-yellow-400' : 'border-gray-300'}`}
+                                                                placeholder="Enter local ASN"
+                                                            />
+                                                        </td>
+                                                        <td className="border border-gray-300 px-4 py-2">
+                                                            <input
+                                                                type="text"
+                                                                value={config.peerAS}
+                                                                onChange={(e) => updateConfig('peerAS', e.target.value)}
+                                                                className={`w-full px-2 py-1 border rounded ${!config.peerAS ? 'bg-yellow-100 border-yellow-400' : 'border-gray-300'}`}
+                                                                placeholder="Enter peer ASN"
+                                                            />
+                                                        </td>
+                                                    </tr>
+                                                    <tr className="bg-gray-50">
+                                                        <td className="border border-gray-300 px-4 py-2 font-medium">BGP Peer IP</td>
+                                                        <td className="border border-gray-300 px-4 py-2">
+                                                            <input
+                                                                type="text"
+                                                                value={config.bgpLocalAddress}
+                                                                onChange={(e) => updateConfig('bgpLocalAddress', e.target.value)}
+                                                                className="w-full px-2 py-1 border border-gray-300 rounded"
+                                                                placeholder="Auto from tunnel IP"
+                                                            />
+                                                        </td>
+                                                        <td className="border border-gray-300 px-4 py-2">
+                                                            <input
+                                                                type="text"
+                                                                value={config.bgpPeerAddress}
+                                                                onChange={(e) => updateConfig('bgpPeerAddress', e.target.value)}
+                                                                className="w-full px-2 py-1 border border-gray-300 rounded"
+                                                                placeholder="Auto from tunnel IP"
+                                                            />
+                                                        </td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td className="border border-gray-300 px-4 py-2 font-medium">BGP Prefixes to Advertise</td>
+                                                        <td className="border border-gray-300 px-4 py-2">
+                                                            <textarea
+                                                                value={config.prefixesToExport}
+                                                                onChange={(e) => updateConfig('prefixesToExport', e.target.value)}
+                                                                className={`w-full px-2 py-1 border rounded text-sm ${!config.prefixesToExport ? 'bg-yellow-100 border-yellow-400' : 'border-gray-300'}`}
+                                                                placeholder="One per line"
+                                                                rows="2"
+                                                            />
+                                                        </td>
+                                                        <td className="border border-gray-300 px-4 py-2">
+                                                            <textarea
+                                                                value={config.prefixesToImport}
+                                                                onChange={(e) => updateConfig('prefixesToImport', e.target.value)}
+                                                                className={`w-full px-2 py-1 border rounded text-sm ${!config.prefixesToImport ? 'bg-yellow-100 border-yellow-400' : 'border-gray-300'}`}
+                                                                placeholder="One per line"
+                                                                rows="2"
+                                                            />
+                                                        </td>
+                                                    </tr>
+                                                </>
+                                            )}
+                                            {config.enableStatic && config.staticRoutes && config.staticRoutes.length > 0 && (
+                                                <tr>
+                                                    <td className="border border-gray-300 px-4 py-2 font-medium">Static Routes</td>
+                                                    <td className="border border-gray-300 px-4 py-2" colSpan="2">
+                                                        <div className="space-y-2">
+                                                            {config.staticRoutes.map((route, index) => (
+                                                                route.network && route.subnetMask && route.nextHop && (
+                                                                    <div key={index} className="text-sm">
+                                                                        {route.network}/{route.subnetMask} via {route.nextHop}
+                                                                        {route.nextHopInterface && ` (${route.nextHopInterface})`}
+                                                                    </div>
+                                                                )
+                                                            ))}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Main Grid Layout */}
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            {/* Left Column - Configuration Inputs */}
+                            <div className="space-y-6">
+                                {/* Panorama Config */}
+                                <div className="bg-white rounded-lg shadow-md p-6">
+                                    <h2 className="text-xl font-bold mb-4 text-gray-900">Panorama Configuration</h2>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Template Name</label>
+                                            <input
+                                                type="text"
+                                                value={config.template}
+                                                onChange={(e) => updateConfig('template', e.target.value)}
+                                                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.template ? 'bg-yellow-100' : ''}`}
+                                                placeholder="e.g., Template-USA"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Device Group</label>
+                                            <input
+                                                type="text"
+                                                value={config.deviceGroup}
+                                                onChange={(e) => updateConfig('deviceGroup', e.target.value)}
+                                                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.deviceGroup ? 'bg-yellow-100' : ''}`}
+                                                placeholder="e.g., DG-USA"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Change Number</label>
+                                            <input
+                                                type="text"
+                                                value={config.changeNumber}
+                                                onChange={(e) => updateConfig('changeNumber', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                placeholder="e.g., CHG0012345"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Change Date</label>
+                                            <input
+                                                type="date"
+                                                value={config.changeDate}
+                                                onChange={(e) => updateConfig('changeDate', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Peer Info */}
+                                <div className="bg-white rounded-lg shadow-md p-6">
+                                    <h2 className="text-xl font-bold mb-4 text-gray-900">Peer Information</h2>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Device Name</label>
+                                            <input
+                                                type="text"
+                                                value={config.deviceName}
+                                                onChange={(e) => updateConfig('deviceName', e.target.value)}
+                                                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.deviceName ? 'bg-yellow-100' : ''}`}
+                                                placeholder="e.g., PA-5220-NYC"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Peer Name</label>
+                                            <input
+                                                type="text"
+                                                value={config.peerName}
+                                                onChange={(e) => updateConfig('peerName', e.target.value)}
+                                                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.peerName ? 'bg-yellow-100' : ''}`}
+                                                placeholder="e.g., AWS-Oregon"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Contact Information</label>
+                                            <textarea
+                                                value={config.contactInfo}
+                                                onChange={(e) => updateConfig('contactInfo', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                placeholder="Name, Email, Phone"
+                                                rows="3"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Peer Type</label>
+                                            <select
+                                                value={config.peerType}
+                                                onChange={(e) => updateConfig('peerType', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                            >
+                                                <option value="aws">AWS</option>
+                                                <option value="azure">Azure</option>
+                                                <option value="gcp">Google Cloud (GCP)</option>
+                                                <option value="cisco">Cisco</option>
+                                                <option value="palo-alto">Palo Alto Networks</option>
+                                                <option value="fortigate">Fortigate</option>
+                                                <option value="other">Other</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* IKE Gateway */}
+                                <div className="bg-white rounded-lg shadow-md p-6">
+                                    <h2 className="text-xl font-bold mb-4 text-gray-900">IKE Gateway</h2>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Gateway Name</label>
+                                            <input
+                                                type="text"
+                                                value={config.ikeGatewayName}
+                                                onChange={(e) => updateConfig('ikeGatewayName', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                placeholder="Auto-generated from Peer Name"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">IKE Version</label>
+                                            <select
+                                                value={config.ikeVersion}
+                                                onChange={(e) => updateConfig('ikeVersion', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                            >
+                                                <option value="ikev1">IKEv1</option>
+                                                <option value="ikev2">IKEv2</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Local Interface</label>
+                                            <input
+                                                type="text"
+                                                value={config.ikeInterface}
+                                                onChange={(e) => updateConfig('ikeInterface', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                placeholder="e.g., ethernet1/1"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Local IP Address (Public)</label>
+                                            <input
+                                                type="text"
+                                                value={config.localAddressPublic}
+                                                onChange={(e) => updateConfig('localAddressPublic', e.target.value)}
+                                                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.localAddressPublic ? 'bg-yellow-100' : ''}`}
+                                                placeholder="e.g., 203.0.113.1"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Local IP Address (Private)</label>
+                                            <input
+                                                type="text"
+                                                value={config.localAddressPrivate}
+                                                onChange={(e) => updateConfig('localAddressPrivate', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                placeholder="e.g., 10.0.0.1"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Peer IP Address</label>
+                                            <input
+                                                type="text"
+                                                value={config.peerAddress}
+                                                onChange={(e) => updateConfig('peerAddress', e.target.value)}
+                                                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.peerAddress ? 'bg-yellow-100' : ''}`}
+                                                placeholder="e.g., 198.51.100.1"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Pre-Shared Key</label>
+                                            <input
+                                                type="password"
+                                                value={config.preSharedKey}
+                                                onChange={(e) => updateConfig('preSharedKey', e.target.value)}
+                                                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.preSharedKey ? 'bg-yellow-100' : ''}`}
+                                                placeholder="Enter pre-shared key"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* IKE Crypto Profile */}
+                                <div className="bg-white rounded-lg shadow-md p-6">
+                                    <h2 className="text-xl font-bold mb-4 text-gray-900">IKE Crypto Profile</h2>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Profile Name</label>
+                                            <input
+                                                type="text"
+                                                value={config.ikeCryptoProfile}
+                                                onChange={(e) => updateConfig('ikeCryptoProfile', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                placeholder="Auto-generated from Peer Name"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Encryption</label>
+                                            <select
+                                                value={config.ikeEncryption}
+                                                onChange={(e) => updateConfig('ikeEncryption', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                            >
+                                                <option value="aes-256-cbc">AES-256-CBC</option>
+                                                <option value="aes-128-cbc">AES-128-CBC</option>
+                                                <option value="aes-256-gcm">AES-256-GCM</option>
+                                                <option value="aes-128-gcm">AES-128-GCM</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Hash</label>
+                                            <select
+                                                value={config.ikeHash}
+                                                onChange={(e) => updateConfig('ikeHash', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                            >
+                                                <option value="sha256">SHA-256</option>
+                                                <option value="sha384">SHA-384</option>
+                                                <option value="sha512">SHA-512</option>
+                                                <option value="sha1">SHA-1</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">DH Group</label>
+                                            <select
+                                                value={config.ikeDHGroup}
+                                                onChange={(e) => updateConfig('ikeDHGroup', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                            >
+                                                <option value="group14">Group 14 (2048-bit)</option>
+                                                <option value="group19">Group 19 (256-bit ECP)</option>
+                                                <option value="group20">Group 20 (384-bit ECP)</option>
+                                                <option value="group5">Group 5 (1536-bit)</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Lifetime (hours)</label>
+                                            <input
+                                                type="number"
+                                                value={config.ikeLifetime}
+                                                onChange={(e) => updateConfig('ikeLifetime', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* IPSec Tunnel */}
+                                <div className="bg-white rounded-lg shadow-md p-6">
+                                    <h2 className="text-xl font-bold mb-4 text-gray-900">IPSec Tunnel</h2>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Tunnel Name</label>
+                                            <input
+                                                type="text"
+                                                value={config.ipsecTunnelName}
+                                                onChange={(e) => updateConfig('ipsecTunnelName', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                placeholder="Auto-generated from Peer Name"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Tunnel Interface</label>
+                                            <input
+                                                type="text"
+                                                value={config.tunnelInterface}
+                                                onChange={(e) => updateConfig('tunnelInterface', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                placeholder="e.g., tunnel.1"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Zone</label>
+                                            <input
+                                                type="text"
+                                                value={config.tunnelZone}
+                                                onChange={(e) => updateConfig('tunnelZone', e.target.value)}
+                                                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.tunnelZone ? 'bg-yellow-100' : ''}`}
+                                                placeholder="e.g., VPN-Zone"
+                                            />
+                                        </div>
+                                        <div className="flex items-center">
+                                            <input
+                                                type="checkbox"
+                                                checked={config.antiReplay}
+                                                onChange={(e) => updateConfig('antiReplay', e.target.checked)}
+                                                className="mr-2"
+                                            />
+                                            <label className="text-sm font-medium text-gray-700">Enable Anti-Replay</label>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* IPSec Crypto Profile */}
+                                <div className="bg-white rounded-lg shadow-md p-6">
+                                    <h2 className="text-xl font-bold mb-4 text-gray-900">IPSec Crypto Profile</h2>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Profile Name</label>
+                                            <input
+                                                type="text"
+                                                value={config.ipsecCryptoProfile}
+                                                onChange={(e) => updateConfig('ipsecCryptoProfile', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                placeholder="Auto-generated from Peer Name"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Protocol</label>
+                                            <select
+                                                value={config.ipsecProtocol}
+                                                onChange={(e) => updateConfig('ipsecProtocol', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                            >
+                                                <option value="esp">ESP</option>
+                                                <option value="ah">AH</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Encryption</label>
+                                            <select
+                                                value={config.ipsecEncryption}
+                                                onChange={(e) => updateConfig('ipsecEncryption', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                            >
+                                                <option value="aes-256-cbc">AES-256-CBC</option>
+                                                <option value="aes-128-cbc">AES-128-CBC</option>
+                                                <option value="aes-256-gcm">AES-256-GCM</option>
+                                                <option value="aes-128-gcm">AES-128-GCM</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Authentication</label>
+                                            <select
+                                                value={config.ipsecAuth}
+                                                onChange={(e) => updateConfig('ipsecAuth', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                            >
+                                                <option value="sha256">SHA-256</option>
+                                                <option value="sha384">SHA-384</option>
+                                                <option value="sha512">SHA-512</option>
+                                                <option value="sha1">SHA-1</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">DH Group</label>
+                                            <select
+                                                value={config.ipsecDHGroup}
+                                                onChange={(e) => updateConfig('ipsecDHGroup', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                            >
+                                                <option value="group14">Group 14 (2048-bit)</option>
+                                                <option value="group19">Group 19 (256-bit ECP)</option>
+                                                <option value="group20">Group 20 (384-bit ECP)</option>
+                                                <option value="group5">Group 5 (1536-bit)</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Lifetime (hours)</label>
+                                            <input
+                                                type="number"
+                                                value={config.ipsecLifetime}
+                                                onChange={(e) => updateConfig('ipsecLifetime', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Tunnel IPs */}
+                                <div className="bg-white rounded-lg shadow-md p-6">
+                                    <h2 className="text-xl font-bold mb-4 text-gray-900">Tunnel IP Configuration</h2>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Local Tunnel IP</label>
+                                            <input
+                                                type="text"
+                                                value={config.tunnelLocalIP}
+                                                onChange={(e) => updateConfig('tunnelLocalIP', e.target.value)}
+                                                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.tunnelLocalIP ? 'bg-yellow-100' : ''}`}
+                                                placeholder="e.g., 169.254.1.1"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Remote Tunnel IP</label>
+                                            <input
+                                                type="text"
+                                                value={config.tunnelRemoteIP}
+                                                onChange={(e) => updateConfig('tunnelRemoteIP', e.target.value)}
+                                                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.tunnelRemoteIP ? 'bg-yellow-100' : ''}`}
+                                                placeholder="e.g., 169.254.1.2"
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">CIDR</label>
+                                                <select
+                                                    value={config.tunnelNetmask === '255.255.255.252' ? '30' : config.tunnelNetmask === '255.255.255.0' ? '24' : ''}
+                                                    onChange={(e) => updateConfig('tunnelNetmask', cidrToMask(e.target.value))}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                >
+                                                    <option value="">Select CIDR</option>
+                                                    <option value="16">/16</option>
+                                                    <option value="17">/17</option>
+                                                    <option value="18">/18</option>
+                                                    <option value="19">/19</option>
+                                                    <option value="20">/20</option>
+                                                    <option value="21">/21</option>
+                                                    <option value="22">/22</option>
+                                                    <option value="23">/23</option>
+                                                    <option value="24">/24</option>
+                                                    <option value="25">/25</option>
+                                                    <option value="26">/26</option>
+                                                    <option value="27">/27</option>
+                                                    <option value="28">/28</option>
+                                                    <option value="29">/29</option>
+                                                    <option value="30">/30</option>
+                                                    <option value="31">/31</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Subnet Mask</label>
+                                                <input
+                                                    type="text"
+                                                    value={config.tunnelNetmask}
+                                                    onChange={(e) => updateConfig('tunnelNetmask', e.target.value)}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                    placeholder="Auto from CIDR"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Proxy ID */}
+                                <div className="bg-white rounded-lg shadow-md p-6">
+                                    <div className="flex items-center justify-between mb-4">
+                                        <h2 className="text-xl font-bold text-gray-900">Proxy ID (Optional)</h2>
+                                        <button
+                                            onClick={() => updateConfig('enableProxyID', !config.enableProxyID)}
+                                            className={`px-4 py-2 rounded-lg transition-colors ${
+                                                config.enableProxyID 
+                                                    ? 'bg-green-600 text-white hover:bg-green-700' 
+                                                    : 'bg-gray-300 text-gray-700 hover:bg-gray-400'
+                                            }`}
+                                        >
+                                            {config.enableProxyID ? '✓ Enabled' : 'Enable Proxy ID'}
+                                        </button>
+                                    </div>
+                                    {config.enableProxyID && (
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Proxy ID Name</label>
+                                                <input
+                                                    type="text"
+                                                    value={config.proxyIdName}
+                                                    onChange={(e) => updateConfig('proxyIdName', e.target.value)}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                    placeholder="Auto-generated from Peer Name"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Local Subnet</label>
+                                                <input
+                                                    type="text"
+                                                    value={config.localSubnet}
+                                                    onChange={(e) => updateConfig('localSubnet', e.target.value)}
+                                                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.localSubnet ? 'bg-yellow-100' : ''}`}
+                                                    placeholder="e.g., 10.0.0.0/24"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Remote Subnet</label>
+                                                <input
+                                                    type="text"
+                                                    value={config.remoteSubnet}
+                                                    onChange={(e) => updateConfig('remoteSubnet', e.target.value)}
+                                                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.remoteSubnet ? 'bg-yellow-100' : ''}`}
+                                                    placeholder="e.g., 192.168.0.0/24"
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* BGP Configuration */}
+                                <div className="bg-white rounded-lg shadow-md p-6">
+                                    <div className="flex items-center justify-between mb-4">
+                                        <h2 className="text-xl font-bold text-gray-900">BGP Configuration (Optional)</h2>
+                                        <button
+                                            onClick={() => updateConfig('enableBGP', !config.enableBGP)}
+                                            className={`px-4 py-2 rounded-lg transition-colors ${
+                                                config.enableBGP 
+                                                    ? 'bg-green-600 text-white hover:bg-green-700' 
+                                                    : 'bg-gray-300 text-gray-700 hover:bg-gray-400'
+                                            }`}
+                                        >
+                                            {config.enableBGP ? '✓ Enabled' : 'Enable BGP'}
+                                        </button>
+                                    </div>
+                                    {config.enableBGP && (
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Local ASN</label>
+                                                <input
+                                                    type="text"
+                                                    value={config.localAS}
+                                                    onChange={(e) => updateConfig('localAS', e.target.value)}
+                                                    className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.localAS ? 'bg-yellow-100' : ''}`}
+                                                    placeholder="e.g., 65001"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Peer ASN</label>
+                                                <input
+                                                    type="text"
+                                                    value={config.peerAS}
+                                                    onChange={(e) => updateConfig('peerAS', e.target.value)}
+                                                    className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.peerAS ? 'bg-yellow-100' : ''}`}
+                                                    placeholder="e.g., 65002"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">BGP Peer Group</label>
+                                                <input
+                                                    type="text"
+                                                    value={config.bgpPeerGroup}
+                                                    onChange={(e) => updateConfig('bgpPeerGroup', e.target.value)}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                    placeholder="Auto-generated from Peer Name"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">BGP Peer Name</label>
+                                                <input
+                                                    type="text"
+                                                    value={config.bgpPeerName}
+                                                    onChange={(e) => updateConfig('bgpPeerName', e.target.value)}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                    placeholder="Auto-generated from Peer Name"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">BGP Local Address</label>
+                                                <input
+                                                    type="text"
+                                                    value={config.bgpLocalAddress}
+                                                    onChange={(e) => updateConfig('bgpLocalAddress', e.target.value)}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                    placeholder="Auto-populated from Tunnel Local IP"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">BGP Peer Address</label>
+                                                <input
+                                                    type="text"
+                                                    value={config.bgpPeerAddress}
+                                                    onChange={(e) => updateConfig('bgpPeerAddress', e.target.value)}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                    placeholder="Auto-populated from Tunnel Remote IP"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Hold Time (seconds)</label>
+                                                <input
+                                                    type="number"
+                                                    value={config.bgpHoldTime}
+                                                    onChange={(e) => updateConfig('bgpHoldTime', e.target.value)}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Keep-Alive Interval (seconds)</label>
+                                                <input
+                                                    type="number"
+                                                    value={config.bgpKeepAlive}
+                                                    onChange={(e) => updateConfig('bgpKeepAlive', e.target.value)}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Prefixes to Export</label>
+                                                <textarea
+                                                    value={config.prefixesToExport}
+                                                    onChange={(e) => updateConfig('prefixesToExport', e.target.value)}
+                                                    className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.prefixesToExport ? 'bg-yellow-100' : ''}`}
+                                                    placeholder="Enter prefixes, one per line (e.g., 10.0.0.0/24)"
+                                                    rows="3"
+                                                />
+                                                <p className="text-xs text-gray-500 mt-1">One prefix per line</p>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Prefixes to Import</label>
+                                                <textarea
+                                                    value={config.prefixesToImport}
+                                                    onChange={(e) => updateConfig('prefixesToImport', e.target.value)}
+                                                    className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 ${!config.prefixesToImport ? 'bg-yellow-100' : ''}`}
+                                                    placeholder="Enter prefixes, one per line (e.g., 192.168.0.0/24)"
+                                                    rows="3"
+                                                />
+                                                <p className="text-xs text-gray-500 mt-1">One prefix per line</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Static Routes Configuration */}
+                                <div className="bg-white rounded-lg shadow-md p-6">
+                                    <div className="flex items-center justify-between mb-4">
+                                        <h2 className="text-xl font-bold text-gray-900">Static Routes (Optional)</h2>
+                                        <button
+                                            onClick={() => updateConfig('enableStatic', !config.enableStatic)}
+                                            className={`px-4 py-2 rounded-lg transition-colors ${
+                                                config.enableStatic 
+                                                    ? 'bg-green-600 text-white hover:bg-green-700' 
+                                                    : 'bg-gray-300 text-gray-700 hover:bg-gray-400'
+                                            }`}
+                                        >
+                                            {config.enableStatic ? '✓ Enabled' : 'Enable Static'}
+                                        </button>
+                                    </div>
+                                    {config.enableStatic && (
+                                        <div className="space-y-4">
+                                            {config.staticRoutes.map((route, index) => (
+                                                <div key={index} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                                                    <div className="flex items-center justify-between mb-3">
+                                                        <h3 className="font-semibold text-gray-800">Route {index + 1}</h3>
+                                                        <button
+                                                            onClick={() => removeStaticRoute(index)}
+                                                            className="px-2 py-1 bg-red-500 text-white text-sm rounded hover:bg-red-600"
+                                                        >
+                                                            Remove
+                                                        </button>
+                                                    </div>
+                                                    <div className="space-y-3">
+                                                        <div>
+                                                            <label className="block text-sm font-medium text-gray-700 mb-1">Network</label>
+                                                            <input
+                                                                type="text"
+                                                                value={route.network}
+                                                                onChange={(e) => updateStaticRoute(index, 'network', e.target.value)}
+                                                                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!route.network ? 'bg-yellow-100' : ''}`}
+                                                                placeholder="e.g., 10.0.0.0"
+                                                            />
+                                                        </div>
+                                                        <div className="grid grid-cols-2 gap-3">
+                                                            <div>
+                                                                <label className="block text-sm font-medium text-gray-700 mb-1">CIDR</label>
+                                                                <select
+                                                                    value={route.cidr || ''}
+                                                                    onChange={(e) => {
+                                                                        updateStaticRoute(index, 'cidr', e.target.value);
+                                                                        updateStaticRoute(index, 'subnetMask', e.target.value);
+                                                                    }}
+                                                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                                >
+                                                                    <option value="">Select CIDR</option>
+                                                                    <option value="16">/16</option>
+                                                                    <option value="17">/17</option>
+                                                                    <option value="18">/18</option>
+                                                                    <option value="19">/19</option>
+                                                                    <option value="20">/20</option>
+                                                                    <option value="21">/21</option>
+                                                                    <option value="22">/22</option>
+                                                                    <option value="23">/23</option>
+                                                                    <option value="24">/24</option>
+                                                                    <option value="25">/25</option>
+                                                                    <option value="26">/26</option>
+                                                                    <option value="27">/27</option>
+                                                                    <option value="28">/28</option>
+                                                                    <option value="29">/29</option>
+                                                                    <option value="30">/30</option>
+                                                                    <option value="31">/31</option>
+                                                                </select>
+                                                            </div>
+                                                            <div>
+                                                                <label className="block text-sm font-medium text-gray-700 mb-1">Subnet Mask</label>
+                                                                <input
+                                                                    type="text"
+                                                                    value={cidrToMask(route.subnetMask) || route.subnetMask}
+                                                                    onChange={(e) => updateStaticRoute(index, 'subnetMask', e.target.value)}
+                                                                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!route.subnetMask ? 'bg-yellow-100' : ''}`}
+                                                                    placeholder="Auto from CIDR"
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-sm font-medium text-gray-700 mb-1">Next-Hop IP</label>
+                                                            <input
+                                                                type="text"
+                                                                value={route.nextHop}
+                                                                onChange={(e) => updateStaticRoute(index, 'nextHop', e.target.value)}
+                                                                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${!route.nextHop ? 'bg-yellow-100' : ''}`}
+                                                                placeholder="e.g., 169.254.1.2"
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-sm font-medium text-gray-700 mb-1">Next-Hop Interface</label>
+                                                            <input
+                                                                type="text"
+                                                                value={route.nextHopInterface}
+                                                                onChange={(e) => updateStaticRoute(index, 'nextHopInterface', e.target.value)}
+                                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                                                placeholder={`Default: ${config.tunnelInterface || 'tunnel.1'}`}
+                                                            />
+                                                            <p className="text-xs text-gray-500 mt-1">Leave blank to use tunnel interface</p>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            <button
+                                                onClick={addStaticRoute}
+                                                className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                            >
+                                                + Add Static Route
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Import/Export */}
+                                <div className="bg-white rounded-lg shadow-md p-6">
+                                    <h2 className="text-xl font-bold mb-4 text-gray-900">Import / Export</h2>
+                                    <div className="space-y-4">
+                                        <button
+                                            onClick={exportToFile}
+                                            className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                                        >
+                                            📤 Export Configuration to JSON
+                                        </button>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Import Configuration</label>
+                                            <input
+                                                type="file"
+                                                accept=".json"
+                                                onChange={importFromFile}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* CLI Output */}
+                            <div className="space-y-6">
+                                <div className="bg-white rounded-lg shadow-md p-6 sticky top-6">
+                                    <div className="flex items-center justify-between mb-4">
+                                        <h2 className="text-xl font-bold text-gray-900">Panorama CLI Commands</h2>
+                                        <button
+                                            onClick={copyCLI}
+                                            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                        >
+                                            📋 Copy CLI
+                                        </button>
+                                    </div>
+                                    <pre className="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto text-sm font-mono max-h-[800px] overflow-y-auto">
+                                        {generateCLI()}
+                                    </pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<VPNPlanner />, document.getElementById('root'));
+    </script>
+</body>
+</html>
